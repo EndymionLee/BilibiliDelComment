@@ -24,11 +24,11 @@
 
 页面右侧的绿色悬浮球，打开工具面板。
 
-![](images/README/boll.png)
+<img src="images/README/boll.png" width="280" alt="悬浮球">
 
 ### 4. 删评论
 
-![](images/README/del.png)
+<img src="images/README/del.png" width="360" alt="删除面板">
 
 点击面板中的「刷新登录态」，确认显示你的用户名和 UID。
 

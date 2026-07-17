@@ -1217,12 +1217,14 @@
 
         await batchDelete(state.comments);
 
-        if (state.failedCount === 0) {
-            state.comments = [];
-        } else {
-
-
-            appendLog('建议重新点击「获取评论」刷新状态', 'info');
+        // 移除已处理（成功+失败）的条目，剩余的可继续删
+        const processed = state.deletedCount + state.failedCount;
+        if (processed > 0) {
+            state.comments = state.comments.slice(processed);
+        }
+        const remaining = state.comments.length;
+        if (remaining > 0) {
+            appendLog(`剩余 ${remaining} 条未处理，可继续删除`, 'info');
         }
         updateStats();
     }
