@@ -234,21 +234,14 @@
                 url: url,
                 responseType: 'text',
                 headers: {
+                    'User-Agent': navigator.userAgent,
                     'Accept': 'application/json, text/plain, */*',
                     'Referer': 'https://www.bilibili.com/',
                 },
                 onload: (res) => {
                     try {
-                        checkStatus(res);
                         const data = parseJSON(res);
-                        if (data.code === 0 && data.data) {
-                            resolve({
-                                items: data.data.items || [],
-                                cursor: data.data.cursor,
-                            });
-                        } else {
-                            reject(new Error(data.message || `消息中心获取失败 (code: ${data.code})`));
-                        }
+                        resolve(data);
                     } catch (e) {
                         reject(e);
                     }
@@ -259,61 +252,115 @@
         });
     }
 
-    async function fetchAllCommentsFromMsgCenter() {
-        const allItems = [];
-        let cursorId = null;
-        let replyTime = null;
-        let isEnd = false;
-        let emptyRounds = 0;
-
-        while (!isEnd && !state.stopRequested && emptyRounds < 3) {
-            const result = await fetchMsgCenterReplies(cursorId, replyTime);
-            const items = result.items || [];
-            const cursor = result.cursor;
-
-            if (items.length === 0) {
-                emptyRounds++;
-                if (cursor && cursor.is_end) isEnd = true;
-                break;
+    function fetchMsgCenterLikes(cursorId, likeTime) {
+        return new Promise((resolve, reject) => {
+            let url = 'https://api.bilibili.com/x/msgfeed/like?platform=web&build=0&mobi_app=web';
+            if (cursorId && likeTime) {
+                url += `&last_id=${cursorId}&like_time=${likeTime}`;
             }
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                responseType: 'text',
+                headers: {
+                    'User-Agent': navigator.userAgent,
+                    'Accept': 'application/json, text/plain, */*',
+                    'Referer': 'https://www.bilibili.com/',
+                },
+                onload: (res) => {
+                    try {
+                        const data = parseJSON(res);
+                        resolve(data);
+                    } catch (e) {
+                        reject(e);
+                    }
+                },
+                onerror: () => reject(new Error('网络错误：连接B站消息中心失败')),
+                ontimeout: () => reject(new Error('请求超时：B站消息中心无响应')),
+            });
+        });
+    }
 
-            for (const item of items) {
-                if (item.item && item.item.reply) {
-                    const reply = item.item.reply;
+    async function fetchAllReplies() {
+        const allItems = [];
+        let cursorId = null, cursorTime = null;
+
+        while (!state.stopRequested) {
+            const result = await fetchMsgCenterReplies(cursorId, cursorTime);
+            if (result.code !== 0 || !result.data) break;
+            const items = result.data.items || [];
+            const cursor = result.data.cursor;
+
+            for (const entry of items) {
+                const item = entry.item;
+                if (item && item.source_id) {
                     allItems.push({
-                        rpid: reply.rpid,
-                        oid: reply.oid,
-                        type: reply.type,
-                        message: reply.content ? reply.content.message : '',
-                        time: reply.ctime,
-                        dyn: { oid: reply.oid, type: reply.type },
-                        _source: 'msgcenter',
+                        rpid: item.source_id,
+                        oid: item.subject_id,
+                        type: item.business_id || 1,
+                        message: item.source_content || item.root_reply_content || '',
+                        dyn: { oid: item.subject_id, type: item.business_id || 1 },
                     });
                 }
             }
 
-            updateStatus(`消息中心: 已获取 ${allItems.length} 条评论`);
+            if (!cursor || cursor.is_end || items.length === 0) break;
+            cursorId = cursor.id;
+            cursorTime = cursor.time;
+            await sleep(20);
+        }
+        return allItems;
+    }
 
-            if (cursor) {
-                isEnd = cursor.is_end;
-                cursorId = cursor.id;
-                replyTime = cursor.time;
-            } else {
-                break;
+    async function fetchAllLikes() {
+        const allItems = [];
+        let cursorId = null, cursorTime = null;
+
+        while (!state.stopRequested) {
+            const result = await fetchMsgCenterLikes(cursorId, cursorTime);
+            if (result.code !== 0 || !result.data) break;
+            const items = result.data.total?.items || [];
+            const cursor = result.data.total?.cursor;
+
+            for (const entry of items) {
+                const item = entry.item;
+                if (item && item.item_id) {
+                    allItems.push({
+                        rpid: item.item_id,
+                        oid: null,
+                        type: 1,
+                        message: item.title || '',
+                        dyn: { oid: null, type: 1 },
+                    });
+                }
             }
 
-            await sleep(500);
+            if (!cursor || cursor.is_end || items.length === 0) break;
+            cursorId = cursor.id;
+            cursorTime = cursor.time;
+            await sleep(20);
         }
+        return allItems;
+    }
+
+    async function fetchAllCommentsFromMsgCenter() {
+        appendLog('正在获取「回复我的」和「收到的赞」...', 'info');
+
+        const [replies, likes] = await Promise.all([
+            fetchAllReplies(),
+            fetchAllLikes(),
+        ]);
 
         const seen = new Set();
         const unique = [];
-        for (const item of allItems) {
+        for (const item of [...replies, ...likes]) {
             if (!seen.has(item.rpid)) {
                 seen.add(item.rpid);
                 unique.push(item);
             }
         }
 
+        appendLog(`消息中心: 回复 ${replies.length} 条 + 点赞 ${likes.length} 条，去重后 ${unique.length} 条`, 'info');
         return unique;
     }
 
@@ -1109,15 +1156,54 @@
         $.btnFetch.textContent = '获取中...';
 
         try {
-
-            updateStatus('正在连接 aicu.cc 获取评论数据...', 'bcc-loading');
+            updateStatus('正在获取评论（aicu.cc + 消息中心）...', 'bcc-loading');
             appendLog(`开始获取 UID ${state.uid} 的评论历史...`, 'info');
 
-            const result = await fetchAllComments(state.uid);
-            state.comments = result.replies;
+            // 并发拉取 aicu.cc 和消息中心
+            const [aicuResult, msgComments] = await Promise.allSettled([
+                fetchAllComments(state.uid),
+                fetchAllCommentsFromMsgCenter(),
+            ]);
+
+            let allComments = [];
+            let aicuCount = 0, msgCount = 0;
+
+            // 处理 aicu.cc 结果
+            if (aicuResult.status === 'fulfilled' && aicuResult.value) {
+                const r = aicuResult.value;
+                aicuCount = r.replies.length;
+                allComments.push(...r.replies);
+                if (r.partial) {
+                    appendLog(`aicu.cc: ${aicuCount} 条（部分，总${r.total || '?'}条中获取到）`, 'warn');
+                } else if (aicuCount > 0) {
+                    appendLog(`aicu.cc: ${aicuCount} 条`, 'success');
+                }
+            } else {
+                appendLog(`aicu.cc: 不可用`, 'warn');
+            }
+
+            // 处理消息中心结果
+            if (msgComments.status === 'fulfilled' && msgComments.value) {
+                msgCount = msgComments.value.length;
+                allComments.push(...msgComments.value);
+                if (msgCount > 0) {
+                    appendLog(`消息中心: ${msgCount} 条`, 'success');
+                }
+            } else if (msgComments.status === 'rejected') {
+                appendLog(`消息中心: ${msgComments.reason?.message || '获取失败'}`, 'warn');
+            }
+
+            // 去重 + 排序
+            const seen = new Set();
+            state.comments = [];
+            for (const c of allComments) {
+                if (!seen.has(c.rpid)) {
+                    seen.add(c.rpid);
+                    state.comments.push(c);
+                }
+            }
             state.deletedCount = 0;
             state.failedCount = 0;
-
             updateStats();
             $.progressWrap.classList.remove('bcc-show');
 
@@ -1125,59 +1211,23 @@
                 updateStatus('没有找到历史评论', 'bcc-success');
                 appendLog('没有找到可删除的历史评论', 'warn');
                 $.btnDelete.disabled = true;
-                return;
-            }
+            } else {
+                updateStatus(`共获取 ${state.comments.length} 条评论（aicu ${aicuCount} + 消息中心 ${msgCount}）`, 'bcc-success');
+                appendLog(`合并去重后共 ${state.comments.length} 条评论可删除`, 'success');
+                $.btnDelete.disabled = false;
 
-            const sourceLabel = result.partial ? `aicu.cc (部分, ${result.total || '?'}条中获取到${state.comments.length}条)` : `aicu.cc`;
-            updateStatus(`共获取 ${state.comments.length} 条评论`, 'bcc-success');
-            appendLog(`成功获取 ${state.comments.length} 条评论，来自 ${sourceLabel}`, result.partial ? 'warn' : 'success');
-            $.btnDelete.disabled = false;
-
-            const previews = state.comments.slice(0, 5);
-            previews.forEach(c => {
-                const msg = decodeEntities(c.message || '').substring(0, 60);
-                appendLog(`[${getCommentTypeLabel(c.dyn ? c.dyn.type : c.type)}] ${msg}`, 'info');
-            });
-            if (state.comments.length > 5) {
-                appendLog(`... 还有 ${state.comments.length - 5} 条评论`, 'info');
-            }
-            return;
-        } catch (err) {
-
-            appendLog(`aicu.cc 获取失败: ${err.message}`, 'error');
-            updateStatus('aicu.cc 不可用，尝试B站消息中心...', 'bcc-loading');
-
-            try {
-                appendLog('正在从B站消息中心获取评论（仅覆盖有互动的评论）...', 'info');
-                const msgComments = await fetchAllCommentsFromMsgCenter();
-                state.comments = msgComments;
-                state.deletedCount = 0;
-                state.failedCount = 0;
-                updateStats();
-                $.progressWrap.classList.remove('bcc-show');
-
-                if (state.comments.length === 0) {
-                    updateStatus('两个数据源均无评论可获取', 'bcc-error');
-                    appendLog('aicu.cc 和 B站消息中心均未找到评论', 'error');
-                    $.btnDelete.disabled = true;
-                } else {
-                    updateStatus(`消息中心: 找到 ${state.comments.length} 条评论`, 'bcc-success');
-                    appendLog(`从B站消息中心获取到 ${state.comments.length} 条评论`, 'success');
-                    $.btnDelete.disabled = false;
-
-                    const previews = state.comments.slice(0, 5);
-                    previews.forEach(c => {
-                        const msg = decodeEntities(c.message || '').substring(0, 60);
-                        appendLog(`[${getCommentTypeLabel(c.dyn ? c.dyn.type : c.type)}] ${msg}`, 'info');
-                    });
-                    if (state.comments.length > 5) {
-                        appendLog(`... 还有 ${state.comments.length - 5} 条评论`, 'info');
-                    }
+                const previews = state.comments.slice(0, 5);
+                previews.forEach(c => {
+                    const msg = decodeEntities(c.message || '').substring(0, 60);
+                    appendLog(`[${getCommentTypeLabel(c.dyn ? c.dyn.type : c.type)}] ${msg}`, 'info');
+                });
+                if (state.comments.length > 5) {
+                    appendLog(`... 还有 ${state.comments.length - 5} 条评论`, 'info');
                 }
-            } catch (msgErr) {
-                updateStatus('所有数据源均获取失败', 'bcc-error');
-                appendLog(`消息中心也获取失败: ${msgErr.message}`, 'error');
             }
+        } catch (err) {
+            updateStatus('获取失败', 'bcc-error');
+            appendLog(`获取评论失败: ${err.message}`, 'error');
         } finally {
             state.isFetching = false;
             $.btnFetch.disabled = false;
