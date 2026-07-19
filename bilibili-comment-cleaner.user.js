@@ -59,6 +59,7 @@
         btnStop: null,
         btnRefresh: null,
         delayInput: null,
+        concurrencyInput: null,
         userRow: null,
         logEl: null,
         statTotal: null,
@@ -447,6 +448,7 @@
 
     async function batchDelete(comments) {
         const delay = parseInt($.delayInput.value, 10) || CONFIG.defaultDelay;
+        const concurrency = parseInt($.concurrencyInput.value, 10) || 3;
         const csrf = getCsrfFromCookie();
 
         if (!csrf) {
@@ -463,31 +465,35 @@
         toggleButtons(false);
 
         const startTime = Date.now();
+        let processed = 0;
 
-        for (let i = 0; i < comments.length; i++) {
+        while (processed < comments.length) {
             if (state.stopRequested) {
                 appendLog('用户已中断删除操作');
                 break;
             }
 
-            const c = comments[i];
-            const rpid = c.rpid;
-            const oid = c.dyn ? c.dyn.oid : c.oid;
-            const type = c.dyn ? c.dyn.type : c.type;
+            const batch = comments.slice(processed, processed + concurrency);
 
-            try {
-                await deleteSingleComment(type, oid, rpid, csrf);
-                state.deletedCount++;
-            } catch (err) {
-                state.failedCount++;
-                appendLog(`[失败] ${err.message} (rpid: ${rpid})`);
-            }
+            await Promise.all(batch.map(async (c) => {
+                const rpid = c.rpid;
+                const oid = c.dyn ? c.dyn.oid : c.oid;
+                const type = c.dyn ? c.dyn.type : c.type;
 
-            const progress = ((i + 1) / comments.length) * 100;
-            updateProgress(progress, i + 1);
+                try {
+                    await deleteSingleComment(type, oid, rpid, csrf);
+                    state.deletedCount++;
+                } catch (err) {
+                    state.failedCount++;
+                    appendLog(`[失败] ${err.message} (rpid: ${rpid})`, 'error');
+                }
+            }));
 
-            if (i < comments.length - 1 && !state.stopRequested) {
+            processed += batch.length;
+            const progress = (processed / comments.length) * 100;
+            updateProgress(progress, processed);
 
+            if (processed < comments.length && !state.stopRequested) {
                 const jitter = delay * (0.8 + Math.random() * 0.4);
                 await sleep(jitter);
             }
@@ -926,9 +932,12 @@
 
                 <!-- 设置 -->
                 <div id="bcc-settings">
-                    <label>删除间隔</label>
+                    <label>每批间隔</label>
                     <input type="number" id="bcc-delay" value="${CONFIG.defaultDelay}" min="${CONFIG.minDelay}" max="${CONFIG.maxDelay}" step="100">
                     <span class="hint">ms</span>
+                    <label style="margin-left:4px">每批删</label>
+                    <input type="number" id="bcc-concurrency" value="3" min="1" max="10" step="1" style="width:40px">
+                    <span class="hint">条</span>
                 </div>
 
                 <!-- 状态 -->
@@ -954,6 +963,7 @@
         $.btnStop = document.getElementById('bcc-btn-stop');
         $.btnRefresh = document.getElementById('bcc-btn-refresh');
         $.delayInput = document.getElementById('bcc-delay');
+        $.concurrencyInput = document.getElementById('bcc-concurrency');
         $.userRow = document.getElementById('bcc-user-row');
         $.logEl = document.getElementById('bcc-log');
         $.statTotal = document.getElementById('bcc-stat-total');
