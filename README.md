@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 获取历史评论(aicu接口，评论不全)
+- 获取历史评论(aicu接口 和 B站消息api，可能不全)
 - 批量删除
 - 获取过程支持增量保留（部分失败不影响已获取的数据）
 
@@ -34,7 +34,7 @@
 
 ## 数据来源
 
-评论列表数据来自 `aicu.cc` 公开 API，如果 aicu.cc 不可用，自动降级到 B站消息中心接口（仅能获取有互动的评论）。
+评论列表数据来自 `aicu.cc` 公开 API 和 B站消息中心接口（仅能获取有互动的评论）。
 
 ## 注意事项
 
@@ -48,4 +48,3 @@
 - [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)
 - [BiliBili_Memory](https://github.com/EuDs63/BiliBili_Memory)
 - [aicu.cc](https://www.aicu.cc/)
-
