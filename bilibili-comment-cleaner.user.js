@@ -39,6 +39,7 @@
         comments: [],
         totalCount: 0,
         deletedCount: 0,
+        skippedCount: 0,
         failedCount: 0,
         isDeleting: false,
         stopRequested: false,
@@ -64,6 +65,7 @@
         logEl: null,
         statTotal: null,
         statDeleted: null,
+        statSkipped: null,
         statFailed: null,
     };
 
@@ -285,26 +287,28 @@
     async function fetchAllReplies() {
         const allItems = [];
         let cursorId = null, cursorTime = null;
-
         while (!state.stopRequested) {
             const result = await fetchMsgCenterReplies(cursorId, cursorTime);
             if (result.code !== 0 || !result.data) break;
             const items = result.data.items || [];
             const cursor = result.data.cursor;
-
             for (const entry of items) {
                 const item = entry.item;
-                if (item && item.source_id) {
+                if (item && item.target_id) {
+                    let oid = null;
+                    if (item.native_uri) {
+                        const m = item.native_uri.match(/\/video\/(\d+)/);
+                        if (m) oid = m[1];
+                    }
                     allItems.push({
-                        rpid: item.source_id,
-                        oid: item.subject_id,
+                        rpid: item.target_id,
+                        oid: oid,
                         type: item.business_id || 1,
-                        message: item.source_content || item.root_reply_content || '',
-                        dyn: { oid: item.subject_id, type: item.business_id || 1 },
+                        message: item.root_reply_content || item.source_content || '',
+                        dyn: { oid: oid, type: item.business_id || 1 },
                     });
                 }
             }
-
             if (!cursor || cursor.is_end || items.length === 0) break;
             cursorId = cursor.id;
             cursorTime = cursor.time;
@@ -326,12 +330,17 @@
             for (const entry of items) {
                 const item = entry.item;
                 if (item && item.item_id) {
+                    let oid = null;
+                    if (item.native_uri) {
+                        const m = item.native_uri.match(/\/video\/(\d+)/);
+                        if (m) oid = m[1];
+                    }
                     allItems.push({
                         rpid: item.item_id,
-                        oid: null,
+                        oid: oid,
                         type: 1,
                         message: item.title || '',
-                        dyn: { oid: null, type: 1 },
+                        dyn: { oid: oid, type: 1 },
                     });
                 }
             }
@@ -377,13 +386,11 @@
                 },
                 onload: (res) => {
                     try {
-                        checkStatus(res);
                         const data = parseJSON(res);
                         if (data.code === 0) {
-                            resolve(true);
-                        } else if (data.code === 12022) {
-
-                            resolve(true);
+                            resolve('deleted');
+                        } else if ([12022, -403, -404, 12009].includes(data.code)) {
+                            resolve('skipped');
                         } else if (data.code === -111) {
                             reject(new Error('CSRF 校验失败，请刷新页面重试'));
                         } else if (data.code === -101) {
@@ -459,6 +466,7 @@
         state.isDeleting = true;
         state.stopRequested = false;
         state.deletedCount = 0;
+        state.skippedCount = 0;
         state.failedCount = 0;
         state.totalCount = comments.length;
 
@@ -481,8 +489,9 @@
                 const type = c.dyn ? c.dyn.type : c.type;
 
                 try {
-                    await deleteSingleComment(type, oid, rpid, csrf);
-                    state.deletedCount++;
+                    const status = await deleteSingleComment(type, oid, rpid, csrf);
+                    if (status === 'deleted') state.deletedCount++;
+                    else state.skippedCount++;
                 } catch (err) {
                     state.failedCount++;
                     appendLog(`[失败] ${err.message} (rpid: ${rpid})`, 'error');
@@ -503,7 +512,7 @@
         state.isDeleting = false;
         toggleButtons(true);
 
-        const summary = `完成！成功删除 ${state.deletedCount} 条，失败 ${state.failedCount} 条，耗时 ${elapsed}秒`;
+        const summary = `完成！删除 ${state.deletedCount} 条，已不存在 ${state.skippedCount} 条，失败 ${state.failedCount} 条，耗时 ${elapsed}秒`;
         appendLog(summary);
         updateStatus(summary);
         updateStats();
@@ -911,6 +920,9 @@
                         <span class="bcc-stat-tag failed">
                             <span class="num" id="bcc-stat-failed">0</span>
                         </span>
+                        <span class="bcc-stat-tag" style="color:var(--text-muted)">
+                            <span class="num" id="bcc-stat-skipped" style="color:var(--text-muted)">0</span>
+                        </span>
                     </div>
                     <div id="bcc-main-actions">
                         <button id="bcc-btn-fetch" class="bcc-btn bcc-btn-primary">获取评论</button>
@@ -969,6 +981,7 @@
         $.statTotal = document.getElementById('bcc-stat-total');
         $.statDeleted = document.getElementById('bcc-stat-deleted');
         $.statFailed = document.getElementById('bcc-stat-failed');
+        $.statSkipped = document.getElementById('bcc-stat-skipped');
 
         applyTheme(getStoredTheme());
 
@@ -1105,6 +1118,7 @@
     function updateStats() {
         $.statTotal.textContent = state.comments.length;
         $.statDeleted.textContent = state.deletedCount;
+        $.statSkipped.textContent = state.skippedCount;
         $.statFailed.textContent = state.failedCount;
     }
 
@@ -1203,7 +1217,7 @@
                 appendLog(`消息中心: ${msgComments.reason?.message || '获取失败'}`, 'warn');
             }
 
-            // 去重 + 排序
+            // 去重
             const seen = new Set();
             state.comments = [];
             for (const c of allComments) {
@@ -1212,7 +1226,9 @@
                     state.comments.push(c);
                 }
             }
+
             state.deletedCount = 0;
+            state.skippedCount = 0;
             state.failedCount = 0;
             updateStats();
             $.progressWrap.classList.remove('bcc-show');
@@ -1260,16 +1276,6 @@
             return;
         }
 
-        if (!confirm(`确认要删除全部 ${state.comments.length} 条评论吗？\n\n此操作不可恢复！\n建议先删除少量测试，确认正常后再批量操作。`)) {
-            return;
-        }
-
-        if (state.comments.length > 50) {
-            if (!confirm(`你确定要删除 ${state.comments.length} 条评论吗？\n\n数量较大，建议分批次执行（如先删前50条）。\n\n点「取消」返回，点「确定」全部删除。`)) {
-                return;
-            }
-        }
-
         $.progressWrap.classList.add('bcc-show');
         updateProgress(0, 0);
         appendLog(`开始删除 ${state.comments.length} 条评论...`, 'warn');
@@ -1278,7 +1284,7 @@
         await batchDelete(state.comments);
 
         // 移除已处理（成功+失败）的条目，剩余的可继续删
-        const processed = state.deletedCount + state.failedCount;
+        const processed = state.deletedCount + state.skippedCount + state.failedCount;
         if (processed > 0) {
             state.comments = state.comments.slice(processed);
         }
