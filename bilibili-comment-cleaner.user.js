@@ -57,7 +57,10 @@
         progressWrap: null,
         btnFetch: null,
         btnDelete: null,
+        btnDelAicu: null,
+        btnDelMsg: null,
         btnStop: null,
+        btnView: null,
         btnRefresh: null,
         delayInput: null,
         concurrencyInput: null,
@@ -306,6 +309,7 @@
                         type: item.business_id || 1,
                         message: item.root_reply_content || item.source_content || '',
                         dyn: { oid: oid, type: item.business_id || 1 },
+                        _source: 'reply',
                     });
                 }
             }
@@ -341,6 +345,7 @@
                         type: 1,
                         message: item.title || '',
                         dyn: { oid: oid, type: 1 },
+                        _source: 'like',
                     });
                 }
             }
@@ -427,6 +432,7 @@
 
                 const existingIds = new Set(allReplies.map(r => r.rpid));
                 const newReplies = replies.filter(r => !existingIds.has(r.rpid));
+                newReplies.forEach(r => r._source = 'aicu');
                 allReplies = allReplies.concat(newReplies);
 
                 updateStatus(`已获取 ${allReplies.length} / ${totalKnown || '?'} 条评论`);
@@ -455,7 +461,7 @@
 
     async function batchDelete(comments) {
         const delay = parseInt($.delayInput.value, 10) || CONFIG.defaultDelay;
-        const concurrency = parseInt($.concurrencyInput.value, 10) || 3;
+        const concurrency = parseInt($.concurrencyInput.value, 10) || 5;
         const csrf = getCsrfFromCookie();
 
         if (!csrf) {
@@ -743,6 +749,17 @@
             color: var(--text-primary);
         }
 
+        #bcc-source-actions .bcc-source-btn {
+            flex: 1; height: 28px; padding: 0 10px;
+            border: 1px solid var(--border-color); border-radius: 6px;
+            font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+            background: transparent; color: var(--text-secondary);
+        }
+        #bcc-source-actions .bcc-source-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        #bcc-source-actions .bcc-source-btn:hover:not(:disabled) {
+            background: var(--bg-secondary); color: var(--text-primary);
+        }
+
         #bcc-progress-wrap {
             display: none;
             margin-bottom: 10px;
@@ -855,6 +872,52 @@
             transform: scale(0.95);
         }
         #bcc-toggle.bcc-hidden { display: none; }
+
+        #bcc-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+            z-index: 2147483647; display: none; align-items: center; justify-content: center;
+        }
+        #bcc-overlay.show { display: flex; }
+        #bcc-modal {
+            background: var(--bg-primary, #fff); border-radius: 14px;
+            width: min(600px, 90vw); max-height: 80vh; overflow: hidden;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.25);
+            display: flex; flex-direction: column;
+        }
+        #bcc-modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; border-bottom: 1px solid var(--border-color, #e0e0e0);
+            font-weight: 600; font-size: 14px; color: var(--text-primary, #1d1d1f);
+        }
+        #bcc-modal-body {
+            overflow-y: auto; padding: 8px 0; flex: 1;
+        }
+        #bcc-modal-body::-webkit-scrollbar { width: 4px; }
+        #bcc-modal-body::-webkit-scrollbar-thumb { background: var(--scrollbar, #d0d0d0); border-radius: 2px; }
+        .bcc-citem {
+            padding: 10px 16px; border-bottom: 1px solid var(--border-color, #f0f0f0);
+            font-size: 13px; color: var(--text-primary, #1d1d1f); line-height: 1.5;
+        }
+        .bcc-citem:last-child { border-bottom: none; }
+        .bcc-citem .idx { color: var(--text-muted, #98989d); font-size: 11px; margin-right: 6px; }
+        .bcc-citem .msg { margin: 2px 0 4px; word-break: break-all; }
+        .bcc-citem .meta { font-size: 11px; color: var(--text-muted, #98989d); }
+        .bcc-citem .meta a { color: var(--accent, #00a8a0); text-decoration: none; }
+        .bcc-citem .meta a:hover { text-decoration: underline; }
+        #bcc-modal-close {
+            background: none; border: none; color: var(--text-muted, #98989d);
+            font-size: 20px; cursor: pointer; padding: 0 4px; font-family: serif;
+        }
+        #bcc-modal-close:hover { color: var(--danger, #ff3b30); }
+        #bcc-overlay.bcc-dark {
+            --bg-primary: #1c1c1e; --bg-secondary: #2c2c2e; --text-primary: #f0f0f0;
+            --text-muted: #6e6e73; --border-color: #3a3a3c; --scrollbar: #48484a;
+        }
+        #bcc-overlay.bcc-dark #bcc-modal { background: var(--bg-primary); }
+        #bcc-overlay.bcc-dark #bcc-modal-header { color: var(--text-primary); border-color: var(--border-color); }
+        #bcc-overlay.bcc-dark .bcc-citem { color: var(--text-primary); border-color: var(--border-color); }
+        #bcc-overlay.bcc-dark .bcc-citem .idx { color: var(--text-muted); }
+        #bcc-overlay.bcc-dark .bcc-citem .meta { color: var(--text-muted); }
     `;
 
     function applyTheme(theme) {
@@ -926,14 +989,21 @@
                     </div>
                     <div id="bcc-main-actions">
                         <button id="bcc-btn-fetch" class="bcc-btn bcc-btn-primary">获取评论</button>
-                        <button id="bcc-btn-delete" class="bcc-btn bcc-btn-danger" disabled>删除</button>
+                        <button id="bcc-btn-delete" class="bcc-btn bcc-btn-danger" disabled>一键删除</button>
                     </div>
                 </div>
 
                 <!-- 辅助按钮 -->
                 <div id="bcc-sub-actions">
                     <button id="bcc-btn-stop" class="bcc-btn" disabled>停止</button>
-                    <button id="bcc-btn-refresh" class="bcc-btn">刷新登录态</button>
+                    <button id="bcc-btn-view" class="bcc-btn" disabled>查看</button>
+                    <button id="bcc-btn-refresh" class="bcc-btn">刷新</button>
+                </div>
+
+                <!-- 来源删除 -->
+                <div id="bcc-source-actions" style="display:flex;gap:6px;margin-bottom:10px">
+                    <button id="bcc-btn-del-aicu" class="bcc-btn bcc-source-btn" disabled>删 aicu</button>
+                    <button id="bcc-btn-del-msg" class="bcc-btn bcc-source-btn" disabled>删 消息</button>
                 </div>
 
                 <!-- 进度 -->
@@ -948,7 +1018,7 @@
                     <input type="number" id="bcc-delay" value="${CONFIG.defaultDelay}" min="${CONFIG.minDelay}" max="${CONFIG.maxDelay}" step="100">
                     <span class="hint">ms</span>
                     <label style="margin-left:4px">每批删</label>
-                    <input type="number" id="bcc-concurrency" value="3" min="1" max="10" step="1" style="width:40px">
+                    <input type="number" id="bcc-concurrency" value="5" min="1" max="10" step="1" style="width:40px">
                     <span class="hint">条</span>
                 </div>
 
@@ -963,7 +1033,29 @@
         `;
         document.body.appendChild(panel);
 
+        // 查看评论弹窗
+        const overlay = document.createElement('div');
+        overlay.id = 'bcc-overlay';
+        overlay.innerHTML = `
+            <div id="bcc-modal">
+                <div id="bcc-modal-header">
+                    <span>评论列表</span>
+                    <button id="bcc-modal-close">&times;</button>
+                </div>
+                <div id="bcc-modal-body"></div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.querySelector('#bcc-modal-close').addEventListener('click', () => overlay.classList.remove('show'));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('show'); });
         $.panel = panel;
+        $.overlay = overlay;
+        // 同步主题
+        if (panel.classList.contains('bcc-dark')) overlay.classList.add('bcc-dark');
+        const obs = new MutationObserver(() => {
+            overlay.classList.toggle('bcc-dark', panel.classList.contains('bcc-dark'));
+        });
+        obs.observe(panel, { attributes: true, attributeFilter: ['class'] });
         $.toggleBtn = toggleBtn;
         $.themeBtn = document.getElementById('bcc-theme-btn');
         $.statusEl = document.getElementById('bcc-status');
@@ -972,7 +1064,10 @@
         $.progressWrap = document.getElementById('bcc-progress-wrap');
         $.btnFetch = document.getElementById('bcc-btn-fetch');
         $.btnDelete = document.getElementById('bcc-btn-delete');
+        $.btnDelAicu = document.getElementById('bcc-btn-del-aicu');
+        $.btnDelMsg = document.getElementById('bcc-btn-del-msg');
         $.btnStop = document.getElementById('bcc-btn-stop');
+        $.btnView = document.getElementById('bcc-btn-view');
         $.btnRefresh = document.getElementById('bcc-btn-refresh');
         $.delayInput = document.getElementById('bcc-delay');
         $.concurrencyInput = document.getElementById('bcc-concurrency');
@@ -1000,8 +1095,11 @@
         makeDraggable(panel, document.getElementById('bcc-header'));
 
         $.btnFetch.addEventListener('click', onFetchComments);
-        $.btnDelete.addEventListener('click', onDeleteAll);
+        $.btnDelete.addEventListener('click', () => onDeleteAll('all'));
+        $.btnDelAicu.addEventListener('click', () => onDeleteAll('aicu'));
+        $.btnDelMsg.addEventListener('click', () => onDeleteAll('msg'));
         $.btnStop.addEventListener('click', onStop);
+        $.btnView.addEventListener('click', onViewComments);
         $.btnRefresh.addEventListener('click', onRefreshLogin);
 
         setTimeout(() => onRefreshLogin(), 500);
@@ -1050,40 +1148,23 @@
     }
 
     function makeToggleDraggable(el, onClick) {
-        let isDragging = false;
-        let startX, startY, origX, origY;
-        let moved = false;
-
+        let startX, startY, moved = false;
         el.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            moved = false;
+            startX = e.clientX; startY = e.clientY; moved = false;
             const rect = el.getBoundingClientRect();
-            startX = e.clientX;
-            startY = e.clientY;
-            origX = rect.left;
-            origY = rect.top;
-            el.style.left = origX + 'px';
-            el.style.right = 'auto';
-            el.style.top = origY + 'px';
-            el.style.bottom = 'auto';
+            el.style.left = rect.left + 'px'; el.style.top = rect.top + 'px';
+            el.style.right = 'auto'; el.style.bottom = 'auto';
             el.style.transition = 'none';
-
             const onMove = (ev) => {
-                if (!isDragging) return;
-                const dx = ev.clientX - startX;
-                const dy = ev.clientY - startY;
-                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-                el.style.left = (origX + dx) + 'px';
-                el.style.top = (origY + dy) + 'px';
+                if (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3) moved = true;
+                el.style.left = (rect.left + ev.clientX - startX) + 'px';
+                el.style.top = (rect.top + ev.clientY - startY) + 'px';
             };
             const onUp = () => {
-                isDragging = false;
-                el.style.transition = 'box-shadow 0.2s, transform 0.15s';
-                if (!moved && onClick) {
-                    onClick();
-                }
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
+                el.style.transition = '';
+                if (!moved) onClick();
             };
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp);
@@ -1124,7 +1205,12 @@
 
     function toggleButtons(enabled) {
         $.btnFetch.disabled = !enabled || state.isFetching;
+        const hasAicu = state.comments.some(c => c._source === 'aicu');
+        const hasMsg = state.comments.some(c => c._source === 'reply' || c._source === 'like');
         $.btnDelete.disabled = !enabled || state.comments.length === 0;
+        $.btnDelAicu.disabled = !enabled || !hasAicu;
+        $.btnDelMsg.disabled = !enabled || !hasMsg;
+        $.btnView.disabled = !enabled || state.comments.length === 0;
         $.btnStop.disabled = enabled;
         $.btnRefresh.disabled = !enabled;
         if (state.isFetching) {
@@ -1262,7 +1348,7 @@
         }
     }
 
-    async function onDeleteAll() {
+    async function onDeleteAll(source) {
         if (state.comments.length === 0) {
             updateStatus('没有可删除的评论', 'bcc-error');
             return;
@@ -1276,12 +1362,27 @@
             return;
         }
 
+        let targetComments = state.comments;
+        let label = '全部';
+        if (source === 'aicu') {
+            targetComments = state.comments.filter(c => c._source === 'aicu');
+            label = 'aicu';
+        } else if (source === 'msg') {
+            targetComments = state.comments.filter(c => c._source === 'reply' || c._source === 'like');
+            label = '消息中心';
+        }
+
+        if (targetComments.length === 0) {
+            updateStatus(`${label} 无可删除评论`, 'bcc-error');
+            return;
+        }
+
         $.progressWrap.classList.add('bcc-show');
         updateProgress(0, 0);
-        appendLog(`开始删除 ${state.comments.length} 条评论...`, 'warn');
-        updateStatus('正在删除...', 'bcc-loading');
+        appendLog(`开始删除 ${label} ${targetComments.length} 条评论...`, 'warn');
+        updateStatus(`正在删除 ${label}...`, 'bcc-loading');
 
-        await batchDelete(state.comments);
+        await batchDelete(targetComments);
 
         // 移除已处理（成功+失败）的条目，剩余的可继续删
         const processed = state.deletedCount + state.skippedCount + state.failedCount;
@@ -1301,6 +1402,78 @@
             appendLog('正在停止...（等待当前删除完成）', 'warn');
             updateStatus('正在停止...', '');
         }
+    }
+
+    const VIEW_PAGE_SIZE = 50;
+    let viewPage = 0;
+
+    function commentUrl(c) {
+        const oid = c.dyn ? c.dyn.oid : c.oid;
+        const type = c.dyn ? c.dyn.type : c.type || 1;
+        if (type === 1 && oid) {
+            return `https://www.bilibili.com/video/av${oid}#reply${c.rpid}`;
+        }
+        if (type === 12 && oid) {
+            return `https://live.bilibili.com/${oid}#reply${c.rpid}`;
+        }
+        return null;
+    }
+
+    function renderViewPage() {
+        const body = $.overlay.querySelector('#bcc-modal-body');
+        const comments = state.comments;
+        const total = comments.length;
+        const totalPages = Math.ceil(total / VIEW_PAGE_SIZE);
+        const start = viewPage * VIEW_PAGE_SIZE;
+        const end = Math.min(start + VIEW_PAGE_SIZE, total);
+        const page = comments.slice(start, end);
+
+        body.innerHTML = '';
+        for (let i = 0; i < page.length; i++) {
+            const c = page[i];
+            const msg = decodeEntities(c.message || '');
+            const url = commentUrl(c);
+            const typeLabel = getCommentTypeLabel(c.dyn ? c.dyn.type : c.type);
+            const div = document.createElement('div');
+            div.className = 'bcc-citem';
+            div.innerHTML = `
+                <span class="idx">#${start + i + 1}</span>
+                <span class="meta">[${typeLabel}]</span>
+                <div class="msg">${escapeHtml(msg).substring(0, 200)}</div>
+                <div class="meta">
+                    rpid: ${c.rpid}
+                    ${url ? `| <a href="${url}" target="_blank">跳转视频评论</a>` : ''}
+                </div>
+            `;
+            body.appendChild(div);
+        }
+
+        const footer = document.createElement('div');
+        footer.style.cssText = 'padding:10px 16px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border-color,#e0e0e0);font-size:12px;color:var(--text-muted,#98989d)';
+        footer.innerHTML = `
+            <span>${start + 1}-${end} / ${total}</span>
+            <div style="display:flex;gap:6px">
+                <button id="bcc-page-prev" style="padding:4px 12px;border:1px solid var(--border-color,#e0e0e0);border-radius:4px;background:transparent;color:var(--text-primary);cursor:pointer;font-size:12px" ${viewPage === 0 ? 'disabled' : ''}>上一页</button>
+                <button id="bcc-page-next" style="padding:4px 12px;border:1px solid var(--border-color,#e0e0e0);border-radius:4px;background:transparent;color:var(--text-primary);cursor:pointer;font-size:12px" ${viewPage >= totalPages - 1 ? 'disabled' : ''}>下一页</button>
+            </div>
+        `;
+        body.appendChild(footer);
+
+        const prevBtn = footer.querySelector('#bcc-page-prev');
+        const nextBtn = footer.querySelector('#bcc-page-next');
+        if (prevBtn) prevBtn.addEventListener('click', () => { viewPage--; renderViewPage(); });
+        if (nextBtn) nextBtn.addEventListener('click', () => { viewPage++; renderViewPage(); });
+    }
+
+    function onViewComments() {
+        if (state.comments.length === 0) return;
+        viewPage = 0;
+        renderViewPage();
+        $.overlay.classList.add('show');
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
 
